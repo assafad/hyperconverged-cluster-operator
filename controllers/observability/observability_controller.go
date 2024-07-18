@@ -2,6 +2,11 @@ package observability
 
 import (
 	"context"
+	hcoutil "github.com/kubevirt/hyperconverged-cluster-operator/pkg/util"
+	monitoringv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
+	appsv1 "k8s.io/api/apps/v1"
+	"k8s.io/utils/ptr"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -21,33 +26,47 @@ var (
 )
 
 type Reconciler struct {
-	config *rest.Config
-	events chan event.GenericEvent
+	config    *rest.Config
+	client    client.Client
+	namespace string
+	owner     metav1.OwnerReference
+	events    chan event.GenericEvent
 
 	amApi *alertmanager.Api
 }
 
-func (r *Reconciler) Reconcile(_ context.Context, _ ctrl.Request) (ctrl.Result, error) {
+func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log.Info("Reconciling Observability")
 
-	if err := r.ensurePodDisruptionBudgetAtLimitIsSilenced(); err != nil {
+	//if err := r.ensurePodDisruptionBudgetAtLimitIsSilenced(); err != nil {
+	//	return ctrl.Result{}, err
+	//}
+
+	if err := r.reconcileRules(ctx); err != nil {
 		return ctrl.Result{}, err
 	}
 
 	return ctrl.Result{}, nil
 }
 
-func NewReconciler(config *rest.Config) *Reconciler {
+func NewReconciler(config *rest.Config, client client.Client, ci hcoutil.ClusterInfo) *Reconciler {
+	deployment := ci.GetDeployment()
+	namespace := deployment.Namespace
+	owner := getDeploymentReference(deployment)
+
 	return &Reconciler{
-		config: config,
-		events: make(chan event.GenericEvent, 1),
+		config:    config,
+		client:    client,
+		namespace: namespace,
+		owner:     owner,
+		events:    make(chan event.GenericEvent, 1),
 	}
 }
 
-func SetupWithManager(mgr ctrl.Manager) error {
+func SetupWithManager(mgr ctrl.Manager, ci hcoutil.ClusterInfo) error {
 	log.Info("Setting up controller")
 
-	r := NewReconciler(mgr.GetConfig())
+	r := NewReconciler(mgr.GetConfig(), mgr.GetClient(), ci)
 	r.startEventLoop()
 
 	return ctrl.NewControllerManagedBy(mgr).
@@ -56,6 +75,7 @@ func SetupWithManager(mgr ctrl.Manager) error {
 			r.events,
 			&handler.EnqueueRequestForObject{},
 		)).
+		Watches(&monitoringv1.PrometheusRule{}, &handler.EnqueueRequestForObject{}).
 		Complete(r)
 }
 
@@ -73,4 +93,15 @@ func (r *Reconciler) startEventLoop() {
 			}
 		}
 	}()
+}
+
+func getDeploymentReference(deployment *appsv1.Deployment) metav1.OwnerReference {
+	return metav1.OwnerReference{
+		APIVersion:         appsv1.SchemeGroupVersion.String(),
+		Kind:               "Deployment",
+		Name:               deployment.GetName(),
+		UID:                deployment.GetUID(),
+		BlockOwnerDeletion: ptr.To(false),
+		Controller:         ptr.To(false),
+	}
 }

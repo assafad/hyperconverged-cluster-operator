@@ -43,6 +43,21 @@ func BuildPrometheusRule(namespace string, owner metav1.OwnerReference) (*promv1
 	return rules, nil
 }
 
+func BuildPrometheusRule2(namespace string, owner metav1.OwnerReference) (*promv1.PrometheusRule, error) {
+	rules, err := operatorrules.BuildPrometheusRule(
+		"cnv-rule",
+		namespace,
+		hcoutil.GetLabels(hcoutil.HyperConvergedName, hcoutil.AppComponentMonitoring),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	rules.OwnerReferences = []metav1.OwnerReference{owner}
+
+	return rules, nil
+}
+
 func ListRecordingRules() []operatorrules.RecordingRule {
 	return operatorrules.ListRecordingRules()
 }
